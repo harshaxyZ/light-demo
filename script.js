@@ -17,102 +17,122 @@ const overlayText = document.getElementById('overlay-text');
 
 let isNight = false;
 let isTransitioning = false;
+let allImagesLoaded = false;
 
-// Preload images
+// Preload ALL 16 images and resolve when fully decoded
 function preloadImages() {
+    const promises = [];
     for (let i = 1; i <= 8; i++) {
-        const day = new Image();
-        day.src = `images-optimized/day/day-image${i}.webp`;
-        const night = new Image();
-        night.src = `images-optimized/night/night-image${i}.webp`;
+        const dayImg = new Image();
+        dayImg.src = `images-optimized/day/day-image${i}.webp`;
+        promises.push(dayImg.decode ? dayImg.decode().catch(() => {}) : Promise.resolve());
+
+        const nightImg = new Image();
+        nightImg.src = `images-optimized/night/night-image${i}.webp`;
+        promises.push(nightImg.decode ? nightImg.decode().catch(() => {}) : Promise.resolve());
     }
+    return Promise.all(promises).then(() => { allImagesLoaded = true; });
 }
 
-// Inject cards
+// Build DOM once
 function initGrid() {
-    products.forEach((p, index) => {
+    const fragment = document.createDocumentFragment();
+    products.forEach((p) => {
         const card = document.createElement('div');
         card.className = 'product-card';
-        card.dataset.index = index;
         card.innerHTML = `
             <div class="image-container">
-                <img src="images-optimized/day/day-image${p.id}.webp" class="product-image image-day" alt="${p.title} Day">
-                <img src="images-optimized/night/night-image${p.id}.webp" class="product-image image-night" alt="${p.title} Night">
+                <img src="images-optimized/day/day-image${p.id}.webp" class="product-image image-day" alt="${p.title} - Day View" loading="eager" decoding="async">
+                <img src="images-optimized/night/night-image${p.id}.webp" class="product-image image-night" alt="${p.title} - Night View" loading="eager" decoding="async">
             </div>
             <div class="card-content">
                 <h3 class="product-title">${p.title}</h3>
                 <div class="price-container">
-                    <span class="price-current">₹${p.price.toLocaleString()}</span>
-                    <span class="price-original">₹${p.originalPrice.toLocaleString()}</span>
+                    <span class="price-current">₹${p.price.toLocaleString('en-IN')}</span>
+                    <span class="price-original">₹${p.originalPrice.toLocaleString('en-IN')}</span>
                 </div>
             </div>
         `;
-        grid.appendChild(card);
+        fragment.appendChild(card);
     });
+    grid.appendChild(fragment);
+}
+
+// Use requestAnimationFrame for buttery scheduling
+function raf() {
+    return new Promise(resolve => requestAnimationFrame(resolve));
+}
+
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function showOverlayText(text, duration) {
     overlayText.textContent = text;
+    await raf();
     overlayText.classList.add('visible');
-    await new Promise(r => setTimeout(r, duration));
+    await wait(duration);
     overlayText.classList.remove('visible');
-    await new Promise(r => setTimeout(r, 150));
+    await wait(120);
 }
 
-async function animateCards(startIndex, count, delay, mode) {
-    const cards = document.querySelectorAll('.product-card');
-    for (let i = 0; i < count; i++) {
-        const index = startIndex + i;
-        if (cards[index]) {
-            const card = cards[index];
-            setTimeout(() => {
-                if (mode === 'night') {
-                    card.classList.add('is-night');
-                } else {
-                    card.classList.remove('is-night');
-                }
-                card.style.transform = 'scale(0.98)';
-                setTimeout(() => {
-                    card.style.transform = 'scale(1)';
-                }, 400);
-            }, i * delay);
-        }
+function switchCard(card, mode) {
+    // Toggle image crossfade class
+    if (mode === 'night') {
+        card.classList.add('is-night');
+    } else {
+        card.classList.remove('is-night');
     }
+    // Trigger scale pulse animation (pure CSS, no inline styles)
+    card.classList.remove('switching');
+    // Force reflow to restart animation (single read — negligible cost for 1 element)
+    void card.offsetWidth;
+    card.classList.add('switching');
 }
 
 async function handleThemeToggle() {
     if (isTransitioning) return;
     isTransitioning = true;
-    
+
+    const cards = document.querySelectorAll('.product-card');
     isNight = !isNight;
-    
+
     if (isNight) {
+        // --- NIGHT MODE ---
         overlay.classList.add('active');
-        body.classList.remove('day-mode');
         body.classList.add('night-mode');
 
-        // Sync: Row 1 (0-3) during text 1
-        const text1 = showOverlayText("Switching to Night Mode…", 900);
-        animateCards(0, 4, 120, 'night');
-        await text1;
+        // Text 1 + Row 1 cards (staggered 100ms apart)
+        const t1 = showOverlayText("Switching to Night Mode…", 800);
+        for (let i = 0; i < 4; i++) {
+            setTimeout(() => switchCard(cards[i], 'night'), i * 100);
+        }
+        await t1;
 
-        // Row 2 (4-7) during text 2
-        const text2 = showOverlayText("See how each light comes alive", 900);
-        animateCards(4, 4, 120, 'night');
-        await text2;
+        // Text 2 + Row 2 cards
+        const t2 = showOverlayText("See how each light comes alive", 800);
+        for (let i = 4; i < 8; i++) {
+            setTimeout(() => switchCard(cards[i], 'night'), (i - 4) * 100);
+        }
+        await t2;
 
-        await showOverlayText("Real lighting. Real ambience.", 900);
-        
+        // Text 3 — pure reveal moment
+        await showOverlayText("Real lighting. Real ambience.", 800);
+
         overlay.classList.remove('active');
         isTransitioning = false;
+
     } else {
+        // --- DAY MODE (faster reverse) ---
         overlay.classList.add('active');
         body.classList.remove('night-mode');
-        body.classList.add('day-mode');
 
-        const text1 = showOverlayText("Back to Daylight", 1000);
-        animateCards(0, 8, 60, 'day'); 
-        await text1;
+        const t1 = showOverlayText("Back to Daylight", 900);
+        // All 8 cards rapid fire
+        for (let i = 0; i < 8; i++) {
+            setTimeout(() => switchCard(cards[i], 'day'), i * 50);
+        }
+        await t1;
 
         overlay.classList.remove('active');
         isTransitioning = false;
@@ -121,6 +141,6 @@ async function handleThemeToggle() {
 
 themeToggle.addEventListener('click', handleThemeToggle);
 
-// Init
+// Init — preload then render
 preloadImages();
 initGrid();
